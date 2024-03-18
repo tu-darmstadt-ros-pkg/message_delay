@@ -13,6 +13,7 @@
 #include <boost/asio/io_service.hpp>
 #include <boost/bind.hpp>
 #include <boost/thread/thread.hpp>
+#include <random>
 
 namespace message_delay {
 
@@ -43,6 +44,10 @@ private:
     // load parameters
     const bool unreliable(pnh.param("unreliable", false));
     delay_.fromSec(pnh.param("delay", 1.));
+    double jitter = pnh.param("jitter", 0.0);
+    if (jitter > 0.0) {
+      distribution_ = std::make_shared<std::normal_distribution<double>>(delay_.toSec(), jitter);
+    }
 
     // subscribe the input topic
     ros::TransportHints transport_hints;
@@ -64,11 +69,20 @@ private:
       publisher_ = msg->advertise(nh, "topic_out", 10);
     }
 
+    ros::Duration delay_duration;
+    if (distribution_) {
+      double delay = distribution_->operator()(gen_);
+      delay = std::max(delay, 0.0);
+      delay_duration.fromSec(delay);
+    } else {
+      delay_duration = delay_;
+    }
+
     // schedule delayed publishment.
     // ros::Timer can do the same thing
     // but boost::asio::deadline_timer is 50% lighter on my test environment.
     boost::asio::deadline_timer *const timer(new boost::asio::deadline_timer(timer_service_));
-    timer->expires_from_now(delay_.toBoost());
+    timer->expires_from_now(delay_duration.toBoost());
     timer->async_wait(boost::bind(&MessageDelay::onTimerExpired, this, msg, timer));
   }
 
@@ -89,6 +103,10 @@ private:
 private:
   // parameters
   ros::Duration delay_;
+
+  std::random_device rd_{};
+  std::mt19937 gen_{rd_()};
+  std::shared_ptr<std::normal_distribution<double>> distribution_;
 
   // ros workers
   ros::Subscriber subscriber_;
